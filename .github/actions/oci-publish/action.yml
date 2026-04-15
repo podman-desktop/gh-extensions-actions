@@ -100,6 +100,6 @@ runs:
     - name: Generate artifact attestation
       uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 #v4.1.0
       with:
-        subject-name: ${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.tag }}
+        subject-name: ${{ inputs.registry }}/${{ inputs.image-name }}
         subject-digest: ${{ steps.push-to-registry.outputs.digest }}
         push-to-registry: true
