@@ -80,7 +80,7 @@ jobs:
     name: Publish content of the pull request
     runs-on: ubuntu-24.04
     steps:
-      - uses: .github/actions/oci-publish
+      - uses: axel7083/gh-extensions-actions/.github/actions/oci-publish@feature/publish-oci-pr
         with:
           run-id: ${{ inputs.run-id }}
           artifact-name: ${{ inputs.artifact-name }}
