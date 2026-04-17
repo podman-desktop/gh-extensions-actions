@@ -96,21 +96,20 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           HEAD_SHA: ${{ inputs.head-sha }}
           IMAGE_NAME: ${{ inputs.registry }}/${{ inputs.image-name }}/${{ inputs.image-name-suffix }}:${{ inputs.head-sha }}
+        shell: bash
         run: |
-          ruby <<'EOF' | gh api repos/${{ github.repository }}/check-runs -X POST --input -
-          require "json"
-
-          report = {
-            name: "OCI Preview Image",
-            head_sha: ENV["HEAD_SHA"],
-            status: "completed",
-            conclusion: "success",
-            output: {
-              title: "Preview Image",
-              summary: "OCI preview image built successfully.",
-              text: "```\n#{ENV["IMAGE_NAME"]}\n```"
+          payload=$(cat <<EOF
+          {
+            "name": "OCI Preview Image",
+            "head_sha": "$HEAD_SHA",
+            "status": "completed",
+            "conclusion": "success",
+            "output": {
+              "title": "Preview Image",
+              "summary": "OCI preview image built successfully.",
+              "text": "\`\`\`\n$IMAGE_NAME\n\`\`\`"
             }
           }
-
-          puts JSON.generate(report)
           EOF
+          )
+          echo "$payload" | gh api repos/${{ github.repository }}/check-runs -X POST --input -
