@@ -26,10 +26,6 @@ inputs:
     required: false
     description: 'The containerfile to use to build the image'
     default: './Containerfile'
-  image-name:
-    required: false
-    description: 'The name of the image'
-    default: ${{ github.repository }}
 
 outputs:
   artifact-id:
@@ -49,12 +45,12 @@ runs:
     - name: Build Image
       uses: redhat-actions/buildah-build@7a95fa7ee0f02d552a32753e7414641a04307056 #v2.13
       with:
-        image: ${{ inputs.image-name }}
+        image: localhost/image
         containerfiles: ${{ inputs.containerfile }}
         context: .
         extra-args: |
           --squash
-          --output type=tar,dest=oci-image.tar
+          --tag oci-archive:oci-image.tar
 
     - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       id: upload-oci-image

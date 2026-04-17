@@ -54,10 +54,9 @@ inputs:
     description: 'The name of the image to publish'
     default: ${{ github.repository }}
 
-  tag:
+  tags:
     required: true
-    description: 'The tag to publish the image with'
-
+    description: 'Whitespace-separated list of tags'
 
 runs:
   using: "composite"
@@ -85,9 +84,32 @@ runs:
         password: ${{ inputs.registry-password }}
         registry: ${{ inputs.registry }}
 
-    - name: Import image
+    - name: Load image
+      id: load-image
       shell: bash
-      run: podman import oci-image.tar ${{ inputs.registry }}/${{ inputs.image-name }}:${{ inputs.tag }}
+      run: |
+        set -euo pipefail
+        
+        OUTPUT=$(podman load -i oci-image.tar)
+        echo "$OUTPUT"
+        
+        IMAGE=$(echo "$OUTPUT" | awk -F': ' '/Loaded image:/ {print $2}' | tail -n1)
+        
+        if [ -z "$IMAGE" ]; then
+          echo "❌ Failed to determine loaded image name"
+          exit 1
+        fi
+        
+        echo "image=$IMAGE" >> "$GITHUB_OUTPUT"
+
+    - name: Tag image(s)
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        for TAG in ${{ inputs.tags }}; do
+          podman tag "${{ steps.load-image.outputs.image }}" "${{ inputs.image-name }}:$TAG"
+        done
 
     - name: Push Image
       id: push-to-registry
@@ -95,7 +117,7 @@ runs:
       with:
         registry: ${{ inputs.registry }}
         image: ${{ inputs.image-name }}
-        tags: ${{ inputs.tag }}
+        tags: ${{ inputs.tags }}
 
     - name: Generate artifact attestation
       uses: actions/attest@59d89421af93a897026c735860bf21b6eb4f7b26 #v4.1.0
