@@ -1,0 +1,116 @@
+#
+# Copyright (C) 2026 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: 'publish-oci-pr'
+on:
+  workflow_call:
+    inputs:
+      run-id:
+        required: true
+        type: string
+        description: 'The id of the workflow run where the artifact was uploaded'
+
+      head-sha:
+        required: true
+        type: string
+        description: 'The commit SHA to tag the image with'
+
+      artifact-name:
+        required: false
+        type: string
+        default: 'artifact'
+        description: 'The name of the artifact to publish'
+
+      image-name:
+        required: false
+        type: string
+        description: 'The name of the image to publish (defaults to repository name)'
+
+      registry:
+        required: false
+        type: string
+        default: 'ghcr.io'
+        description: 'The registry to publish the image to'
+
+      registry-username:
+        required: false
+        type: string
+        default: ${{ github.repository_owner }}
+        description: 'The username to authenticate with the registry (defaults to repository owner)'
+
+      image-name-suffix:
+        required: false
+        type: string
+        default: 'pr'
+        description: 'Suffix for the image'
+
+    secrets:
+      registry-password:
+        required: true
+        description: 'The password to authenticate with the registry'
+
+permissions:
+  contents: read
+  id-token: write
+  attestations: write
+  actions: read
+  packages: write
+  checks: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.run-id }}
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    name: Publish content of the pull request
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: .github/actions/oci-publish
+        with:
+          run-id: ${{ inputs.run-id }}
+          artifact-name: ${{ inputs.artifact-name }}
+          github-token: ${{ github.token }}
+          registry: ${{ inputs.registry }}
+          registry-username: ${{ inputs.registry-username }}
+          registry-password: ${{ secrets.registry-password }}
+          image-name: ${{ inputs.registry }}/${{ inputs.image-name }}/${{ inputs.image-name-suffix }}
+          tags: ${{ inputs.head-sha }}
+
+      - name: Publish check run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          HEAD_SHA: ${{ inputs.head-sha }}
+          IMAGE_NAME: ${{ inputs.registry }}/${{ inputs.image-name }}/${{ inputs.image-name-suffix }}:${{ inputs.head-sha }}
+        run: |
+          ruby <<'EOF' | gh api repos/${{ github.repository }}/check-runs -X POST --input -
+          require "json"
+
+          report = {
+            name: "OCI Preview Image",
+            head_sha: ENV["HEAD_SHA"],
+            status: "completed",
+            conclusion: "success",
+            output: {
+              title: "Preview Image",
+              summary: "OCI preview image built successfully.",
+              text: "```\n#{ENV["IMAGE_NAME"]}\n```"
+            }
+          }
+
+          puts JSON.generate(report)
+          EOF
