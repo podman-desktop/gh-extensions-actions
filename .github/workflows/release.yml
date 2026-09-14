@@ -32,7 +32,7 @@ concurrency:
 jobs:
   release:
     name: Cut the next minor release
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-26.04
     permissions:
       contents: write
     steps:
