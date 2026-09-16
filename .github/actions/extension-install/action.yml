@@ -61,7 +61,7 @@ runs:
         curl -fsSL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION/go-containerregistry_${OS}_${ARCH}.tar.gz" \
           | tar -xz -C "$RUNNER_TEMP" crane
 
-        NAME="${NAME:-$(echo "${IMAGE%%:*}" | tr -cd '[:alnum:]')}"
+        NAME="${NAME:-$(echo "$IMAGE" | tr -cd '[:alnum:]')}"
         DEST="$PLUGINS_DIRECTORY/$NAME"
         mkdir -p "$DEST"
 
@@ -87,7 +87,7 @@ runs:
         curl.exe -fsSL "https://github.com/google/go-containerregistry/releases/download/$env:CRANE_VERSION/go-containerregistry_Windows_$arch.tar.gz" -o "$env:RUNNER_TEMP\crane.tar.gz"
         tar.exe -xzf "$env:RUNNER_TEMP\crane.tar.gz" -C $env:RUNNER_TEMP crane.exe
 
-        $name = if ($env:NAME) { $env:NAME } else { $env:IMAGE.Split(':')[0] -replace '[^a-zA-Z0-9]', '' }
+        $name = ($env:IMAGE -replace '[^a-zA-Z0-9]', '')
         $dest = New-Item -ItemType Directory -Force -Path (Join-Path $env:PLUGINS_DIRECTORY $name)
 
         # extract OCI image /extension directory
