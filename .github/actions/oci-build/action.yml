@@ -51,7 +51,16 @@ runs:
         context: .
         extra-args: |
           --squash
-          --tag oci-archive:oci-image.tar
+
+    # buildah-build v3 inspects localhost/image:latest after the build to compute its digest output.
+    # Passing `--tag oci-archive:...` as an extra arg made buildah write straight to the archive and
+    # never tag the image in local storage, so that lookup failed with "image not known".
+    # Build a normal local image instead and export it explicitly.
+    - name: Export image to OCI archive
+      shell: bash
+      run: |
+        set -euo pipefail
+        buildah push localhost/image:latest oci-archive:oci-image.tar:localhost/image:latest
 
     - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
       id: upload-oci-image
