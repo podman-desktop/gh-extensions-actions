@@ -1,0 +1,98 @@
+#
+# Copyright (C) 2026 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: 'extension-install'
+description: 'Install a Podman Desktop extension OCI image into a plugins directory'
+
+inputs:
+  image:
+    required: true
+    description: 'OCI image reference of the extension (e.g. ghcr.io/crc-org/crc-extension:next)'
+  plugins-directory:
+    required: true
+    description: 'Podman Desktop plugins directory (<PODMAN_DESKTOP_HOME_DIR>/plugins). Created if missing.'
+  name:
+    required: false
+    description: 'Folder name under plugins-directory. Defaults to what Podman Desktop uses when installing from an image: the reference without tag, non-alphanumeric characters removed (ghcr.io/crc-org/crc-extension:next -> ghcriocrcorgcrcextension).'
+  crane-version:
+    required: false
+    default: 'v0.22.1'
+    description: 'google/go-containerregistry release providing the crane binary'
+
+outputs:
+  extension-path:
+    value: ${{ steps.unix.outputs.extension-path || steps.windows.outputs.extension-path }}
+    description: 'Absolute path of the installed extension folder'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Install extension (Linux, macOS)
+      if: runner.os != 'Windows'
+      id: unix
+      shell: bash
+      env:
+        IMAGE: ${{ inputs.image }}
+        PLUGINS_DIRECTORY: ${{ inputs.plugins-directory }}
+        NAME: ${{ inputs.name }}
+        CRANE_VERSION: ${{ inputs.crane-version }}
+        RUNNER_OS: ${{ runner.os }}
+        RUNNER_ARCH: ${{ runner.arch }}
+      run: |
+        set -euo pipefail
+
+        # install crane
+        OS=$([[ "$RUNNER_OS" == "macOS" ]] && echo Darwin || echo Linux)
+        ARCH=$([[ "$RUNNER_ARCH" == "ARM64" ]] && echo arm64 || echo x86_64)
+        curl -fsSL "https://github.com/google/go-containerregistry/releases/download/$CRANE_VERSION/go-containerregistry_${OS}_${ARCH}.tar.gz" \
+          | tar -xz -C "$RUNNER_TEMP" crane
+
+        NAME="${NAME:-$(echo "$IMAGE" | tr -cd '[:alnum:]')}"
+        DEST="$PLUGINS_DIRECTORY/$NAME"
+        mkdir -p "$DEST"
+
+        # extract OCI image /extension directory
+        "$RUNNER_TEMP/crane" export "$IMAGE" - | tar -x -C "$DEST" --strip-components=1 extension
+
+        echo "Installed $IMAGE in $DEST"
+        echo "extension-path=$(cd "$DEST" && pwd)" >> "$GITHUB_OUTPUT"
+
+    - name: Install extension (Windows)
+      if: runner.os == 'Windows'
+      id: windows
+      shell: pwsh
+      env:
+        IMAGE: ${{ inputs.image }}
+        PLUGINS_DIRECTORY: ${{ inputs.plugins-directory }}
+        NAME: ${{ inputs.name }}
+        CRANE_VERSION: ${{ inputs.crane-version }}
+        RUNNER_ARCH: ${{ runner.arch }}
+      run: |
+        # install crane
+        $arch = if ($env:RUNNER_ARCH -eq 'ARM64') { 'arm64' } else { 'x86_64' }
+        curl.exe -fsSL "https://github.com/google/go-containerregistry/releases/download/$env:CRANE_VERSION/go-containerregistry_Windows_$arch.tar.gz" -o "$env:RUNNER_TEMP\crane.tar.gz"
+        tar.exe -xzf "$env:RUNNER_TEMP\crane.tar.gz" -C $env:RUNNER_TEMP crane.exe
+
+        $name = ($env:IMAGE -replace '[^a-zA-Z0-9]', '')
+        $dest = New-Item -ItemType Directory -Force -Path (Join-Path $env:PLUGINS_DIRECTORY $name)
+
+        # extract OCI image /extension directory
+        & "$env:RUNNER_TEMP\crane.exe" export $env:IMAGE "$env:RUNNER_TEMP\$name.tar"
+        tar.exe -xf "$env:RUNNER_TEMP\$name.tar" -C $dest --strip-components=1 extension
+
+        Write-Host "Installed $env:IMAGE in $dest"
+        "extension-path=$dest" >> $env:GITHUB_OUTPUT
