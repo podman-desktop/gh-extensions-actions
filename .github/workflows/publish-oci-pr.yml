@@ -38,7 +38,7 @@ on:
       image-name:
         required: false
         type: string
-        description: 'The name of the image to publish (defaults to repository name)'
+        description: 'The name of the image to publish (defaults to repository name), must not contain the registry'
 
       registry:
         required: false
@@ -80,7 +80,9 @@ jobs:
     name: Publish content of the pull request
     runs-on: ubuntu-24.04
     steps:
-      - uses: podman-desktop/gh-extensions-actions/.github/actions/oci-publish@b3bb8515d9f255a05c0ff37ead1002435c75dcd1 # v0.3.0
+      # push-to-registry v3 prefixes unqualified source names with localhost/.
+      # Do not include the registry in image-name; oci-publish applies it once.
+      - uses: podman-desktop/gh-extensions-actions/.github/actions/oci-publish@51711eb8a46af8a63ad36d32b63908ce8af8d163 # v0.6.0
         with:
           run-id: ${{ inputs.run-id }}
           artifact-name: ${{ inputs.artifact-name }}
@@ -88,7 +90,7 @@ jobs:
           registry: ${{ inputs.registry }}
           registry-username: ${{ inputs.registry-username }}
           registry-password: ${{ secrets.registry-password }}
-          image-name: ${{ inputs.registry }}/${{ inputs.image-name }}/${{ inputs.image-name-suffix }}
+          image-name: ${{ inputs.image-name }}/${{ inputs.image-name-suffix }}
           tags: ${{ inputs.head-sha }}
 
       - name: Publish check run
