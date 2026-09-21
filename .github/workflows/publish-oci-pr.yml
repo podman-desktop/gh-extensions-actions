@@ -82,7 +82,7 @@ jobs:
     steps:
       # push-to-registry v3 prefixes unqualified source names with localhost/.
       # Do not include the registry in image-name; oci-publish applies it once.
-      - uses: podman-desktop/gh-extensions-actions/.github/actions/oci-publish@51711eb8a46af8a63ad36d32b63908ce8af8d163 # v0.6.0
+      - uses: podman-desktop/gh-extensions-actions/.github/actions/oci-publish@dde0e72aec31e5df8918d82db9ca8d298a37d305 # v0.7.0
         with:
           run-id: ${{ inputs.run-id }}
           artifact-name: ${{ inputs.artifact-name }}
