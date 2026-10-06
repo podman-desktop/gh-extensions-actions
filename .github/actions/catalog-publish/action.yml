@@ -1,0 +1,263 @@
+#
+# Copyright (C) 2026 Red Hat, Inc.
+#
+# Licensed under the Apache License, Version 2.0 (the "License");
+# you may not use this file except in compliance with the License.
+# You may obtain a copy of the License at
+#
+# http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+# SPDX-License-Identifier: Apache-2.0
+
+name: 'catalog-publish'
+description: 'Open a pull request on the Podman Desktop catalog for a published extension OCI image'
+
+inputs:
+  oci-uri:
+    required: true
+    description: 'The published extension image (e.g. ghcr.io/podman-desktop/extension-kreate:0.4.0).'
+  token:
+    required: true
+    description: 'Token able to push to the fork repository and to open pull requests on the catalog repository.'
+  fork-repository:
+    required: false
+    description: 'The fork of the catalog repository the branch is pushed to.'
+    default: 'podman-desktop-bot/podman-desktop-catalog'
+  catalog-repository:
+    required: false
+    description: 'The catalog repository the pull request is opened on.'
+    default: 'podman-desktop/podman-desktop-catalog'
+  catalog-file:
+    required: false
+    description: 'Path of the catalog JSON file in the catalog repository.'
+    default: 'static/api/extensions.json'
+  assets-dir:
+    required: false
+    description: 'Directory of the catalog repository holding the extension assets (README, LICENSE, icon).'
+    default: 'static/api/extensions'
+  assets-url:
+    required: false
+    description: 'Public URL under which the assets directory is served.'
+    default: 'https://registry.podman-desktop.io/api/extensions'
+
+outputs:
+  pull-request-url:
+    value: ${{ steps.pull-request.outputs.url }}
+    description: 'The URL of the catalog pull request (empty if the version is already in the catalog).'
+
+runs:
+  using: "composite"
+  steps:
+    - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 #v7.0.1
+      with:
+        repository: ${{ inputs.catalog-repository }}
+        path: podman-desktop-catalog
+        persist-credentials: false
+
+    - name: Extract extension from image
+      id: extract
+      shell: bash
+      env:
+        OCI_URI: ${{ inputs.oci-uri }}
+        EXTRACT_DIR: ${{ runner.temp }}/catalog-publish
+      run: |
+        set -euo pipefail
+        mkdir -p "$EXTRACT_DIR"
+        # extension images are FROM scratch: give a command so the container can be created
+        container=$(podman create --quiet "$OCI_URI" /extension)
+        podman export "$container" | tar -x -C "$EXTRACT_DIR" extension
+        podman rm -f "$container" > /dev/null
+        echo "dir=$EXTRACT_DIR/extension" >> "$GITHUB_OUTPUT"
+
+    - name: Read extension manifest
+      id: manifest
+      shell: bash
+      env:
+        MANIFEST: ${{ steps.extract.outputs.dir }}/package.json
+      run: |
+        set -euo pipefail
+        jq -e '.publisher and .name and .version and .displayName and .icon' "$MANIFEST" > /dev/null \
+          || { echo "::error::package.json must define publisher, name, version, displayName and icon"; exit 1; }
+        {
+          echo "publisher=$(jq -r '.publisher' "$MANIFEST")"
+          echo "name=$(jq -r '.name' "$MANIFEST")"
+          echo "version=$(jq -r '.version' "$MANIFEST")"
+          echo "display-name=$(jq -r '.displayName' "$MANIFEST")"
+          echo "icon=$(jq -r '.icon' "$MANIFEST")"
+        } >> "$GITHUB_OUTPUT"
+
+    - name: Check if version is already in the catalog
+      id: catalog
+      shell: bash
+      working-directory: podman-desktop-catalog
+      env:
+        CATALOG_FILE: ${{ inputs.catalog-file }}
+        PUBLISHER: ${{ steps.manifest.outputs.publisher }}
+        NAME: ${{ steps.manifest.outputs.name }}
+        VERSION: ${{ steps.manifest.outputs.version }}
+      run: |
+        set -euo pipefail
+        exists=$(jq --arg p "$PUBLISHER" --arg n "$NAME" --arg v "$VERSION" \
+          'any(.extensions[] | select(.publisher.publisherName == $p and .extensionName == $n) | .versions[]; .version == $v)' \
+          "$CATALOG_FILE")
+        if [ "$exists" = "true" ]; then
+          echo "::notice::$PUBLISHER/$NAME $VERSION is already in the catalog"
+        fi
+        echo "exists=$exists" >> "$GITHUB_OUTPUT"
+
+    - name: Add version to the catalog
+      if: steps.catalog.outputs.exists == 'false'
+      shell: bash
+      working-directory: podman-desktop-catalog
+      env:
+        CATALOG_FILE: ${{ inputs.catalog-file }}
+        MANIFEST: ${{ steps.extract.outputs.dir }}/package.json
+        OCI_URI: ${{ inputs.oci-uri }}
+        PUBLISHER: ${{ steps.manifest.outputs.publisher }}
+        NAME: ${{ steps.manifest.outputs.name }}
+        VERSION: ${{ steps.manifest.outputs.version }}
+        BASE_URL: ${{ inputs.assets-url }}/${{ steps.manifest.outputs.publisher }}/${{ steps.manifest.outputs.name }}/${{ steps.manifest.outputs.version }}
+      run: |
+        set -euo pipefail
+        jq --slurpfile pkg "$MANIFEST" \
+          --arg publisher "$PUBLISHER" --arg name "$NAME" --arg version "$VERSION" \
+          --arg ociUri "$OCI_URI" --arg baseUrl "$BASE_URL" \
+          --arg date "$(date -u +%Y-%m-%dT00:00:00Z)" '
+          $pkg[0] as $pkg
+          | def is_ext: .publisher.publisherName == $publisher and .extensionName == $name;
+          if any(.extensions[]; is_ext) then
+            # new version: copy the latest one and prepend it
+            (.extensions[] | select(is_ext) | .versions) |= [
+              (.[0]
+                | .version = $version
+                | .ociUri = $ociUri
+                | .lastUpdated = $date
+                | .files |= map(.data = $baseUrl + "/" + (.data | split("/") | last)))
+            ] + .
+          else
+            # first release: build the entry from package.json
+            .extensions += [{
+              publisher: {
+                publisherName: $publisher,
+                displayName: (first(.extensions[] | select(.publisher.publisherName == $publisher) | .publisher.displayName)
+                  // error("unknown publisher \($publisher): add the extension to the catalog manually"))
+              },
+              extensionName: $name,
+              displayName: $pkg.displayName,
+              shortDescription: ($pkg.description // ""),
+              license: ($pkg.license // ""),
+              categories: ($pkg.categories // []),
+              keywords: ($pkg.keywords // []),
+              versions: [
+                {version: $version}
+                + (if $pkg.engines["podman-desktop"] then {podmanDesktopVersion: $pkg.engines["podman-desktop"]} else {} end)
+                + {
+                  preview: false,
+                  lastUpdated: $date,
+                  ociUri: $ociUri,
+                  files: [
+                    {assetType: "icon", data: "\($baseUrl)/icon.png"},
+                    {assetType: "README", data: "\($baseUrl)/README.md"},
+                    {assetType: "LICENSE", data: "\($baseUrl)/LICENSE"}
+                  ]
+                }
+              ]
+            }]
+          end
+        ' "$CATALOG_FILE" > "$CATALOG_FILE.tmp"
+        mv "$CATALOG_FILE.tmp" "$CATALOG_FILE"
+
+    - name: Copy assets
+      if: steps.catalog.outputs.exists == 'false'
+      shell: bash
+      working-directory: podman-desktop-catalog
+      env:
+        CATALOG_FILE: ${{ inputs.catalog-file }}
+        EXTENSION_DIR: ${{ steps.extract.outputs.dir }}
+        ICON: ${{ steps.manifest.outputs.icon }}
+        PUBLISHER: ${{ steps.manifest.outputs.publisher }}
+        NAME: ${{ steps.manifest.outputs.name }}
+        VERSION: ${{ steps.manifest.outputs.version }}
+        ASSETS_DIR: ${{ inputs.assets-dir }}/${{ steps.manifest.outputs.publisher }}/${{ steps.manifest.outputs.name }}/${{ steps.manifest.outputs.version }}
+      run: |
+        set -euo pipefail
+        mkdir -p "$ASSETS_DIR"
+        # copy each asset under the file name referenced by the new version (e.g. LICENSE or LICENSE.txt)
+        jq -r --arg p "$PUBLISHER" --arg n "$NAME" --arg v "$VERSION" \
+          '.extensions[] | select(.publisher.publisherName == $p and .extensionName == $n)
+            | .versions[] | select(.version == $v) | .files[] | "\(.assetType) \(.data | split("/") | last)"' \
+          "$CATALOG_FILE" | while read -r asset_type file_name; do
+          case "$asset_type" in
+            icon) cp "$EXTENSION_DIR/$ICON" "$ASSETS_DIR/$file_name" ;;
+            README) cp "$EXTENSION_DIR/README.md" "$ASSETS_DIR/$file_name" ;;
+            LICENSE) cp "$EXTENSION_DIR/LICENSE" "$ASSETS_DIR/$file_name" ;;
+            *) echo "::error::unknown asset type $asset_type"; exit 1 ;;
+          esac
+        done
+
+    - name: Setup Biome
+      if: steps.catalog.outputs.exists == 'false'
+      uses: biomejs/setup-biome@4c91541eaada48f67d7dbd7833600ce162b68f51 # v2.7.1
+      with:
+        working-dir: podman-desktop-catalog
+
+    - name: Format catalog
+      if: steps.catalog.outputs.exists == 'false'
+      shell: bash
+      working-directory: podman-desktop-catalog
+      env:
+        CATALOG_FILE: ${{ inputs.catalog-file }}
+      run: |
+        set -euo pipefail
+        biome format --write "$CATALOG_FILE"
+
+    - name: Open pull request
+      id: pull-request
+      if: steps.catalog.outputs.exists == 'false'
+      shell: bash
+      working-directory: podman-desktop-catalog
+      env:
+        GH_TOKEN: ${{ inputs.token }}
+        FORK: ${{ inputs.fork-repository }}
+        CATALOG: ${{ inputs.catalog-repository }}
+        CATALOG_FILE: ${{ inputs.catalog-file }}
+        ASSETS_DIR: ${{ inputs.assets-dir }}
+        OCI_URI: ${{ inputs.oci-uri }}
+        PUBLISHER: ${{ steps.manifest.outputs.publisher }}
+        NAME: ${{ steps.manifest.outputs.name }}
+        VERSION: ${{ steps.manifest.outputs.version }}
+        DISPLAY_NAME: ${{ steps.manifest.outputs.display-name }}
+        SOURCE_REPOSITORY: ${{ github.server_url }}/${{ github.repository }}
+      run: |
+        set -euo pipefail
+        branch="publish/$PUBLISHER-$NAME-$VERSION"
+        title="feat: publish $DISPLAY_NAME v$VERSION"
+
+        # commit as the owner of the token
+        login=$(gh api user --jq '.login')
+        id=$(gh api user --jq '.id')
+        git config user.name "$login"
+        git config user.email "$id+$login@users.noreply.github.com"
+
+        git switch -c "$branch"
+        git add "$CATALOG_FILE" "$ASSETS_DIR"
+        git commit --signoff -m "$title"
+        git push --force "https://x-access-token:$GH_TOKEN@github.com/$FORK.git" "$branch"
+
+        printf 'Publish `%s` to the catalog.\n\nSource: %s\n' "$OCI_URI" "$SOURCE_REPOSITORY" > "$RUNNER_TEMP/pr-body.md"
+
+        url=$(gh pr list --repo "$CATALOG" --head "$branch" --state open --json url --jq '.[0].url // empty')
+        if [ -z "$url" ]; then
+          url=$(gh pr create --repo "$CATALOG" --base main --head "${FORK%%/*}:$branch" \
+            --title "$title" --body-file "$RUNNER_TEMP/pr-body.md")
+        fi
+        gh pr edit "$url" --add-reviewer podman-desktop/qe-reviewers
+
+        echo "Pull request: $url"
+        echo "url=$url" >> "$GITHUB_OUTPUT"
